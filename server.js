@@ -3,6 +3,9 @@ const cors = require("cors");
 const { Pool } = require("pg");
 
 const app = express();
+app.get("/", (req, res) => {
+  res.send("Earn App Backend is Running ✅");
+});
 app.use(cors());
 app.use(express.json());
 
