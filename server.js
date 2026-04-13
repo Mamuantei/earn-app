@@ -2,178 +2,148 @@ const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
 
-const db = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-db.query(`
-CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
-  username TEXT,
-  email TEXT,
-  password TEXT,
-  balance REAL DEFAULT 0
-);
-`);
-
-db.query(`
-CREATE TABLE IF NOT EXISTS withdraws (
-  id SERIAL PRIMARY KEY,
-  userId INTEGER,
-  amount REAL,
-  status TEXT DEFAULT 'pending'
-);
-`);
-
 const app = express();
-
-app.use(cors({
-  origin: "*"
-}));
+app.use(cors());
 app.use(express.json());
 
-// SIMPLE MEMORY STORAGE
-let users = [];
-let withdraws = [];
-
-// HOME
-app.get("/", (req, res) => {
-  res.send("API is running 🚀");
+// 🔗 DATABASE (Render PostgreSQL)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
+// ✅ CREATE TABLES
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT,
+      email TEXT UNIQUE,
+      password TEXT,
+      balance INTEGER DEFAULT 0
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS withdraws (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER,
+      amount INTEGER,
+      status TEXT DEFAULT 'pending'
+    );
+  `);
+}
+initDB();
+
+
+// 🔐 SIGNUP
 app.post("/signup", async (req, res) => {
   const { username, email, password } = req.body;
 
   try {
-    const result = await db.query(
-      "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING *",
+    const result = await pool.query(
+      "INSERT INTO users (username, email, password) VALUES ($1,$2,$3) RETURNING *",
       [username, email, password]
     );
-
-    res.json({
-      message: "User created",
-      user: result.rows[0]
-    });
-
+    res.json({ user: result.rows[0] });
   } catch (err) {
-    console.log(err);
-    res.json({ error: "Signup failed" });
+    res.json({ message: "User already exists ❌" });
   }
 });
+
+
+// 🔐 LOGIN
 app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
-  try {
-    const result = await db.query(
-      "SELECT * FROM users WHERE email=$1 AND password=$2",
-      [email, password]
-    );
+  const result = await pool.query(
+    "SELECT * FROM users WHERE email=$1 AND password=$2",
+    [email, password]
+  );
 
-    if (result.rows.length === 0) {
-      return res.json({ message: "Invalid login" });
-    }
-
-    res.json({
-      message: "Login successful",
-      user: result.rows[0]
-    });
-
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Login failed" });
+  if (result.rows.length === 0) {
+    return res.json({ message: "Invalid login ❌" });
   }
+
+  res.json({ user: result.rows[0] });
 });
 
+
+// 💰 GET BALANCE
+app.get("/balance/:id", async (req, res) => {
+  const result = await pool.query(
+    "SELECT balance FROM users WHERE id=$1",
+    [req.params.id]
+  );
+
+  res.json({ balance: result.rows[0]?.balance || 0 });
+});
+
+
+// 💸 EARN
 app.post("/earn", async (req, res) => {
   const { userId, points } = req.body;
 
-  try {
-    const earned = points * 0.002;
+  await pool.query(
+    "UPDATE users SET balance = balance + $1 WHERE id=$2",
+    [points, userId]
+  );
 
-    await db.query(
-      "UPDATE users SET balance = balance + $1 WHERE id = $2",
-      [earned, userId]
-    );
-
-    res.json({ earned });
-
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Earn failed" });
-  }
+  res.json({ earned: points / 500 }); // ₹ conversion
 });
+
+
+// 💳 WITHDRAW
 app.post("/withdraw", async (req, res) => {
   const { userId, amount } = req.body;
 
-  try {
-    await db.query(
-      "INSERT INTO withdraws (userId, amount) VALUES ($1, $2)",
-      [userId, amount]
-    );
+  const user = await pool.query(
+    "SELECT balance FROM users WHERE id=$1",
+    [userId]
+  );
 
-    res.json({ message: "Withdraw request sent" });
-
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Withdraw failed" });
+  if (user.rows[0].balance < amount) {
+    return res.json({ message: "Not enough balance ❌" });
   }
+
+  await pool.query(
+    "UPDATE users SET balance = balance - $1 WHERE id=$2",
+    [amount, userId]
+  );
+
+  await pool.query(
+    "INSERT INTO withdraws (user_id, amount) VALUES ($1,$2)",
+    [userId, amount]
+  );
+
+  res.json({ message: "Withdraw request sent ✅" });
 });
+
+
+// 🧑‍💼 ADMIN - GET WITHDRAWS
 app.get("/admin/withdraws", async (req, res) => {
-  try {
-    const result = await db.query("SELECT * FROM withdraws");
-    res.json(result.rows);
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Failed to load withdraws" });
-  }
+  const result = await pool.query("SELECT * FROM withdraws");
+  res.json(result.rows);
 });
 
+
+// 🧑‍💼 ADMIN - APPROVE
 app.post("/admin/approve", async (req, res) => {
   const { id } = req.body;
 
-  try {
-    await db.query(
-      "UPDATE withdraws SET status='approved' WHERE id=$1",
-      [id]
-    );
+  await pool.query(
+    "UPDATE withdraws SET status='approved' WHERE id=$1",
+    [id]
+  );
 
-    res.json({ message: "Approved" });
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Approve failed" });
-  }
-});
-// PORT FIX (IMPORTANT)
-const PORT = process.env.PORT || 5000;
-app.get("/balance/:id", async (req, res) => {
-  try {
-    const result = await db.query(
-      "SELECT balance FROM users WHERE id=$1",
-      [req.params.id]
-    );
-
-    res.json(result.rows[0]);
-
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Failed to get balance" });
-  }
+  res.json({ message: "Approved ✅" });
 });
 
+
+// 🚀 START SERVER
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
-});
-app.get("/balance/:id", async (req, res) => {
-  try {
-    const result = await db.query(
-      "SELECT balance FROM users WHERE id=$1",
-      [req.params.id]
-    );
-
-    res.json(result.rows[0]);
-
-  } catch (err) {
-    console.log(err);
-    res.json({ error: "Failed to get balance" });
-  }
 });
