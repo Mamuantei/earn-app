@@ -1,5 +1,29 @@
 const express = require("express");
 const cors = require("cors");
+const { Pool } = require("pg");
+
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+db.query(`
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  username TEXT,
+  email TEXT,
+  password TEXT,
+  balance REAL DEFAULT 0
+);
+`);
+
+db.query(`
+CREATE TABLE IF NOT EXISTS withdraws (
+  id SERIAL PRIMARY KEY,
+  userId INTEGER,
+  amount REAL,
+  status TEXT DEFAULT 'pending'
+);
+`);
 
 const app = express();
 
@@ -17,71 +41,108 @@ app.get("/", (req, res) => {
   res.send("API is running 🚀");
 });
 
-// SIGNUP
-app.post("/signup", (req, res) => {
-  const user = {
-    id: users.length + 1,
-    username: req.body.username,
-    email: req.body.email,
-    password: req.body.password,
-    balance: 0
-  };
+app.post("/signup", async (req, res) => {
+  const { username, email, password } = req.body;
 
-  users.push(user);
+  try {
+    const result = await db.query(
+      "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING *",
+      [username, email, password]
+    );
 
-  res.json({ message: "User created", user });
-});
+    res.json({
+      message: "User created",
+      user: result.rows[0]
+    });
 
-// LOGIN
-app.post("/login", (req, res) => {
-  const user = users.find(
-    u => u.email === req.body.email && u.password === req.body.password
-  );
-
-  if (!user) {
-    return res.json({ message: "Invalid login" });
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Signup failed" });
   }
+});
+app.post("/login", async (req, res) => {
+  const { email, password } = req.body;
 
-  res.json({ message: "Login successful", user });
+  try {
+    const result = await db.query(
+      "SELECT * FROM users WHERE email=$1 AND password=$2",
+      [email, password]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ message: "Invalid login" });
+    }
+
+    res.json({
+      message: "Login successful",
+      user: result.rows[0]
+    });
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Login failed" });
+  }
 });
 
-// EARN
-app.post("/earn", (req, res) => {
-  const user = users.find(u => u.id === req.body.userId);
+app.post("/earn", async (req, res) => {
+  const { userId, points } = req.body;
 
-  if (!user) return res.json({ error: "User not found" });
+  try {
+    const earned = points * 0.002;
 
-  let earned = req.body.points * 0.002;
-  user.balance += earned;
+    await db.query(
+      "UPDATE users SET balance = balance + $1 WHERE id = $2",
+      [earned, userId]
+    );
 
-  res.json({ earned });
+    res.json({ earned });
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Earn failed" });
+  }
+});
+app.post("/withdraw", async (req, res) => {
+  const { userId, amount } = req.body;
+
+  try {
+    await db.query(
+      "INSERT INTO withdraws (userId, amount) VALUES ($1, $2)",
+      [userId, amount]
+    );
+
+    res.json({ message: "Withdraw request sent" });
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Withdraw failed" });
+  }
+});
+app.get("/admin/withdraws", async (req, res) => {
+  try {
+    const result = await db.query("SELECT * FROM withdraws");
+    res.json(result.rows);
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Failed to load withdraws" });
+  }
 });
 
-// WITHDRAW
-app.post("/withdraw", (req, res) => {
-  withdraws.push({
-    id: withdraws.length + 1,
-    userId: req.body.userId,
-    amount: req.body.amount,
-    status: "pending"
-  });
+app.post("/admin/approve", async (req, res) => {
+  const { id } = req.body;
 
-  res.json({ message: "Withdraw request sent" });
+  try {
+    await db.query(
+      "UPDATE withdraws SET status='approved' WHERE id=$1",
+      [id]
+    );
+
+    res.json({ message: "Approved" });
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Approve failed" });
+  }
 });
-
-// ADMIN
-app.get("/admin/withdraws", (req, res) => {
-  res.json(withdraws);
-});
-
-// APPROVE
-app.post("/admin/approve", (req, res) => {
-  const w = withdraws.find(x => x.id === req.body.id);
-  if (w) w.status = "approved";
-
-  res.json({ message: "Approved" });
-});
-
 // PORT FIX (IMPORTANT)
 const PORT = process.env.PORT || 5000;
 
