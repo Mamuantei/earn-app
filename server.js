@@ -145,7 +145,35 @@ app.post("/admin/approve", async (req, res) => {
 });
 // PORT FIX (IMPORTANT)
 const PORT = process.env.PORT || 5000;
+app.get("/balance/:id", async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT balance FROM users WHERE id=$1",
+      [req.params.id]
+    );
+
+    res.json(result.rows[0]);
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Failed to get balance" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
+});
+app.get("/balance/:id", async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT balance FROM users WHERE id=$1",
+      [req.params.id]
+    );
+
+    res.json(result.rows[0]);
+
+  } catch (err) {
+    console.log(err);
+    res.json({ error: "Failed to get balance" });
+  }
 });
